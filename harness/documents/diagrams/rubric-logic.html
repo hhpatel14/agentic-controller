@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rubric Logic - Ingest Loop Diagrams</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+      background: #0d1117;
+      color: #c9d1d9;
+    }
+    h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 0.5rem; }
+    h2 { color: #79c0ff; margin-top: 3rem; }
+    .diagram { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin: 1rem 0 2rem; overflow-x: auto; }
+    .mermaid { display: flex; justify-content: center; }
+    p { color: #8b949e; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>Rubric Logic - Ingest Loop Diagrams</h1>
+  <p>Five diagrams describing the ingest interview loop that sits between detect and plan in the migration harness pipeline.</p>
+
+  <h2>1. Main Flow</h2>
+  <p>The complete ingest pipeline: scan graphify output, run interview rounds, produce context for planning.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TD
+    START([Ingest Step Begins]) --> SCAN
+
+    subgraph ROUND_0["ROUND 0 - SCAN - no user interaction"]
+        SCAN["Read graphify-out/\ndetect.json + graph.json"] --> PREFILL
+        PREFILL["Pre-fill categories\nfrom graph data"]
+        PREFILL --> R1_PRE["R1 Source Stack\nLanguage, framework,\napp server from graph\nscore +70"]
+        PREFILL --> R3_PRE["R3 Custom Deps\nScan pom.xml system-scope\nscan lib/ for local jars\nscore +30 if found\nscore +80 if none"]
+        PREFILL --> R4_PRE["R4 Messaging\nDetect JMS, MDB,\nTopic annotations\nscore +30 if found\nscore +80 if none"]
+        PREFILL --> R5_PRE["R5 Persistence\nDetect JPA,\npersistence.xml\nscore +50"]
+        PREFILL --> R6_PRE["R6 Entry Point\nGraph topology:\nApplicationPath, main\nscore +90 to 100"]
+    end
+
+    R1_PRE --> COVERAGE_CHECK
+    R3_PRE --> COVERAGE_CHECK
+    R4_PRE --> COVERAGE_CHECK
+    R5_PRE --> COVERAGE_CHECK
+    R6_PRE --> COVERAGE_CHECK
+
+    COVERAGE_CHECK{"All 6 required\ncategories >= 80%?"}
+    COVERAGE_CHECK -->|Yes| FREEFORM
+    COVERAGE_CHECK -->|No| SELECT
+
+    subgraph INTERVIEW_LOOP["ROUNDS 1-6 - INTERVIEW"]
+        SELECT["Select 3-4 lowest-scoring\nrequired categories"] --> FORMULATE
+        FORMULATE["Formulate 1 question\nper category"] --> PRESENT
+        PRESENT["Present numbered\nquestion batch\nto user"] --> RECEIVE
+        RECEIVE["Receive user answers"] --> SCORE_UPDATE
+    end
+
+    subgraph SCORING["SCORE UPDATE"]
+        SCORE_UPDATE["Parse each answer\nby category ID"]
+        SCORE_UPDATE --> CONCRETE{"Concrete\nanswer?"}
+        CONCRETE -->|Yes| PLUS40["Category score\n+40 points\ncap at 100"]
+        CONCRETE -->|"Skip / dont know"| ASSUME["Create assumption\nMEDIUM or LOW"]
+        ASSUME --> PLUS0["Score unchanged\nor +20"]
+    end
+
+    PLUS40 --> ROUND_CHECK
+    PLUS0 --> ROUND_CHECK
+
+    ROUND_CHECK{"Check\ntermination"}
+    ROUND_CHECK -->|"All >= 80%"| FREEFORM
+    ROUND_CHECK -->|"Max 6 rounds"| OUTPUT
+    ROUND_CHECK -->|"User: go ahead"| OUTPUT
+    ROUND_CHECK -->|"Continue"| SELECT
+
+    subgraph FREEFORM_ROUND["FINAL ROUND - FREE-FORM"]
+        FREEFORM["Ask: Anything else?\nCustom build steps,\ngotchas, quirks?"]
+        FREEFORM --> FF_ANSWER{"User\nresponds?"}
+        FF_ANSWER -->|New info| LOG_FF["Log under\nDesign Decisions"]
+        FF_ANSWER -->|"No"| SKIP_FF["Skip"]
+    end
+
+    LOG_FF --> OUTPUT
+    SKIP_FF --> OUTPUT
+
+    subgraph OUTPUT_PHASE["OUTPUT"]
+        OUTPUT["Write INGEST_CONTEXT.md"]
+        OUTPUT --> CONTEXT_FILE["INGEST_CONTEXT.md\nSource Stack\nTarget Stack\nCustom Deps\nMessaging\nPersistence\nEntry Point\nAssumptions\nQ and A Log"]
+        OUTPUT --> JSON_FILE["ingest.json"]
+    end
+
+    CONTEXT_FILE --> DONE([Feed into Plan Step])
+    JSON_FILE --> DONE
+    </pre>
+  </div>
+
+  <h2>2. Rubric Categories</h2>
+  <p>Six required categories (must reach 80% before planning) and six optional. Arrows show what graphify can pre-fill.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+graph LR
+    subgraph REQUIRED["REQUIRED - must reach 80 percent"]
+        direction TB
+        R1["R1\nSource Stack\nConfirmation"]
+        R2["R2\nTarget Stack\nDetails"]
+        R3["R3\nCustom/Proprietary\nDependencies"]
+        R4["R4\nMessaging and\nAsync Patterns"]
+        R5["R5\nData Persistence\nStrategy"]
+        R6["R6\nEntry Point and\nDependency Order"]
+    end
+
+    subgraph OPTIONAL["OPTIONAL - asked if rounds remain"]
+        direction TB
+        O1["O1 Auth/AuthZ"]
+        O2["O2 External Integrations"]
+        O3["O3 Deployment Target"]
+        O4["O4 Design Preferences"]
+        O5["O5 Team Context"]
+        O6["O6 Timeline"]
+    end
+
+    R1 -.->|"graphify\npre-fills"| GRAPH[(graphify-out)]
+    R3 -.->|"partial"| GRAPH
+    R4 -.->|"partial"| GRAPH
+    R5 -.->|"partial"| GRAPH
+    R6 -.->|"full"| GRAPH
+    R2 -.->|"user only"| USER((User))
+    </pre>
+  </div>
+
+  <h2>3. Coverage Scoring Per Category</h2>
+  <p>Each category scores 0-100% from three components. Threshold to proceed: all required at 80%+.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+    subgraph SCORE["Score Composition - 0 to 100 percent"]
+        direction LR
+        USER_ANS["User Answer\n0-40 pts\n---------\n0 = not asked\n20 = vague\n40 = concrete"]
+        GRAPH_DATA["Graphify Data\n0-30 pts\n---------\n0 = no data\n15 = partial\n30 = confirmed"]
+        AMBIGUITY["Clarity\n0-30 pts\n---------\n0 = ambiguous\n15 = minor assumes\n30 = unambiguous"]
+    end
+
+    USER_ANS --> SUM
+    GRAPH_DATA --> SUM
+    AMBIGUITY --> SUM
+
+    SUM["Sum - capped at 100"] --> THRESHOLD
+
+    THRESHOLD{"Score?"}
+    THRESHOLD -->|"100"| RESOLVED["RESOLVED\nNo questions needed"]
+    THRESHOLD -->|"80-99"| SUFFICIENT["SUFFICIENT\nMinor assumptions\ndocumented"]
+    THRESHOLD -->|"50-79"| PARTIAL["PARTIAL\nMust ask more\nquestions"]
+    THRESHOLD -->|"0-49"| MISSING["MISSING\nPriority for\nnext round"]
+    </pre>
+  </div>
+
+  <h2>4. Assumption Confidence Levels</h2>
+  <p>When a category can't be fully resolved, assumptions are tagged and surfaced differently in the plan.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+graph LR
+    subgraph CONFIDENCE["Assumption Handling"]
+        HIGH["HIGH\nGraphify confirms,\ncommon pattern,\nuser did not contradict\n---------\nFootnote in plan"]
+        MEDIUM["MEDIUM\nReasonable guess,\nmultiple options valid,\nuser said whatever\n---------\nDecision point in plan"]
+        LOW["LOW\nNo data,\nno user input,\npure guess\n---------\nRisk/blocker in plan"]
+    end
+    </pre>
+  </div>
+
+  <h2>5. Coolstore Migration Walkthrough</h2>
+  <p>How the ingest loop would have played out on the Java EE to Quarkus coolstore migration.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+sequenceDiagram
+    participant G as Graphify
+    participant I as Ingest Loop
+    participant U as User
+    participant P as Plan Step
+
+    Note over G,I: ROUND 0 - SCAN
+    G->>I: detect.json + graph.json
+    I->>I: R1=70% Java EE 7, Maven
+    I->>I: R3=30% audit-logging-library detected
+    I->>I: R4=30% JMS/MDB detected
+    I->>I: R5=50% JPA detected
+    I->>I: R6=100% RestApplication entry point
+    I->>I: R2=0% no target info
+
+    Note over I,U: ROUND 1 - INTERVIEW
+    I->>U: Q1 [R2] What Quarkus version?
+    I->>U: Q2 [R3] audit-logging-library - what does it do?
+    I->>U: Q3 [R4] JMS replacement - CDI Events, Reactive, or Kafka?
+    U->>I: A1 Quarkus latest
+    U->>I: A2 Internal lib, just remove it
+    U->>I: A3 CDI Events, all in-process
+    I->>I: R2 40 to 80%
+    I->>I: R3 30 to 70%
+    I->>I: R4 30 to 70%
+
+    Note over I,U: ROUND 2 - INTERVIEW
+    I->>U: Q1 [R1] Confirm Java EE 7 on WebLogic?
+    I->>U: Q2 [R5] H2 for dev, PostgreSQL for prod?
+    I->>U: Q3 [R3] Any other proprietary libs?
+    U->>I: A1 Yes, WebLogic
+    U->>I: A2 Yes, H2 + PostgreSQL
+    U->>I: A3 No, just that one
+    I->>I: All required at 80% or above
+
+    Note over I,U: FINAL ROUND - FREE-FORM
+    I->>U: Anything else I should know?
+    U->>I: No, that is it
+
+    Note over I,P: OUTPUT
+    I->>P: INGEST_CONTEXT.md + ingest.json
+    Note over P: Plan step reads context<br/>knows about audit lib,<br/>CDI Events decision,<br/>and WebLogic stubs<br/>BEFORE writing PLAN.md
+    </pre>
+  </div>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      flowchart: { curve: 'basis', padding: 20 },
+      sequence: { mirrorActors: false }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+graph LR
+    subgraph REQUIRED["REQUIRED - must reach 80 percent"]
+        direction TB
+        R1["R1\nSource Stack\nConfirmation"]
+        R2["R2\nTarget Stack\nDetails"]
+        R3["R3\nCustom/Proprietary\nDependencies"]
+        R4["R4\nMessaging and\nAsync Patterns"]
+        R5["R5\nData Persistence\nStrategy"]
+        R6["R6\nEntry Point and\nDependency Order"]
+    end
+
+    subgraph OPTIONAL["OPTIONAL - asked if rounds remain"]
+        direction TB
+        O1["O1 Auth/AuthZ"]
+        O2["O2 External Integrations"]
+        O3["O3 Deployment Target"]
+        O4["O4 Design Preferences"]
+        O5["O5 Team Context"]
+        O6["O6 Timeline"]
+    end
+
+    R1 -.->|"graphify\npre-fills"| GRAPH[(graphify-out)]
+    R3 -.->|"partial"| GRAPH
+    R4 -.->|"partial"| GRAPH
+    R5 -.->|"partial"| GRAPH
+    R6 -.->|"full"| GRAPH
+    R2 -.->|"user only"| USER((User))

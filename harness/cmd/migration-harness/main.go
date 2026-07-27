@@ -25,6 +25,7 @@ import (
 	"github.com/konveyor/migration-harness/internal/git"
 	"github.com/konveyor/migration-harness/internal/goose"
 	"github.com/konveyor/migration-harness/internal/handoff"
+	"github.com/konveyor/migration-harness/internal/ingest"
 	"github.com/konveyor/migration-harness/internal/logging"
 	"github.com/konveyor/migration-harness/internal/metrics"
 	"github.com/konveyor/migration-harness/internal/plan"
@@ -310,6 +311,22 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	}
 	tracker.EndStep()
 	syncSession("konveyor: detect complete")
+
+	// Step 1b: Ingest (Interview Loop)
+	tracker.StartStep("ingest")
+	ingestReport, err := ingest.Run(ctx, workDir, runDir, request, recipesDir, runner)
+	if err != nil {
+		logging.Warn("ingest: %v (continuing to plan)", err)
+	}
+	if ingestReport != nil {
+		session.Pipeline.Ingest = &handoff.IngestStatus{
+			StepStatus:      handoff.StepStatus{Status: "completed", DurationSeconds: tracker.StepDuration("ingest")},
+			RoundsCompleted: ingestReport.RoundsCompleted,
+			Termination:     ingestReport.Termination,
+		}
+	}
+	tracker.EndStep()
+	syncSession("konveyor: ingest complete")
 
 	// Step 2: Plan
 	tracker.StartStep("plan")

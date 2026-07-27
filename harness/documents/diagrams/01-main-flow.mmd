@@ -1,0 +1,65 @@
+flowchart TD
+    START([Ingest Step Begins]) --> SCAN
+
+    subgraph ROUND_0["ROUND 0 - SCAN - no user interaction"]
+        SCAN["Read graphify-out/\ndetect.json + graph.json"] --> PREFILL
+        PREFILL["Pre-fill categories\nfrom graph data"]
+        PREFILL --> R1_PRE["R1 Source Stack\nLanguage, framework,\napp server from graph\nscore +70"]
+        PREFILL --> R3_PRE["R3 Custom Deps\nScan pom.xml system-scope\nscan lib/ for local jars\nscore +30 if found\nscore +80 if none"]
+        PREFILL --> R4_PRE["R4 Messaging\nDetect JMS, MDB,\nTopic annotations\nscore +30 if found\nscore +80 if none"]
+        PREFILL --> R5_PRE["R5 Persistence\nDetect JPA,\npersistence.xml\nscore +50"]
+        PREFILL --> R6_PRE["R6 Entry Point\nGraph topology:\nApplicationPath, main\nscore +90 to 100"]
+    end
+
+    R1_PRE --> COVERAGE_CHECK
+    R3_PRE --> COVERAGE_CHECK
+    R4_PRE --> COVERAGE_CHECK
+    R5_PRE --> COVERAGE_CHECK
+    R6_PRE --> COVERAGE_CHECK
+
+    COVERAGE_CHECK{"All 6 required\ncategories >= 80%?"}
+    COVERAGE_CHECK -->|Yes| FREEFORM
+    COVERAGE_CHECK -->|No| SELECT
+
+    subgraph INTERVIEW_LOOP["ROUNDS 1-6 - INTERVIEW"]
+        SELECT["Select 3-4 lowest-scoring\nrequired categories"] --> FORMULATE
+        FORMULATE["Formulate 1 question\nper category"] --> PRESENT
+        PRESENT["Present numbered\nquestion batch\nto user"] --> RECEIVE
+        RECEIVE["Receive user answers"] --> SCORE_UPDATE
+    end
+
+    subgraph SCORING["SCORE UPDATE"]
+        SCORE_UPDATE["Parse each answer\nby category ID"]
+        SCORE_UPDATE --> CONCRETE{"Concrete\nanswer?"}
+        CONCRETE -->|Yes| PLUS40["Category score\n+40 points\ncap at 100"]
+        CONCRETE -->|"Skip / dont know"| ASSUME["Create assumption\nMEDIUM or LOW"]
+        ASSUME --> PLUS0["Score unchanged\nor +20"]
+    end
+
+    PLUS40 --> ROUND_CHECK
+    PLUS0 --> ROUND_CHECK
+
+    ROUND_CHECK{"Check\ntermination"}
+    ROUND_CHECK -->|"All >= 80%"| FREEFORM
+    ROUND_CHECK -->|"Max 6 rounds"| OUTPUT
+    ROUND_CHECK -->|"User: go ahead"| OUTPUT
+    ROUND_CHECK -->|"Continue"| SELECT
+
+    subgraph FREEFORM_ROUND["FINAL ROUND - FREE-FORM"]
+        FREEFORM["Ask: Anything else?\nCustom build steps,\ngotchas, quirks?"]
+        FREEFORM --> FF_ANSWER{"User\nresponds?"}
+        FF_ANSWER -->|New info| LOG_FF["Log under\nDesign Decisions"]
+        FF_ANSWER -->|"No"| SKIP_FF["Skip"]
+    end
+
+    LOG_FF --> OUTPUT
+    SKIP_FF --> OUTPUT
+
+    subgraph OUTPUT_PHASE["OUTPUT"]
+        OUTPUT["Write INGEST_CONTEXT.md"]
+        OUTPUT --> CONTEXT_FILE["INGEST_CONTEXT.md\nSource Stack\nTarget Stack\nCustom Deps\nMessaging\nPersistence\nEntry Point\nAssumptions\nQ and A Log"]
+        OUTPUT --> JSON_FILE["ingest.json"]
+    end
+
+    CONTEXT_FILE --> DONE([Feed into Plan Step])
+    JSON_FILE --> DONE

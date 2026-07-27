@@ -50,8 +50,15 @@ type FixLoopStatus struct {
 	Iterations int `json:"iterations"`
 }
 
+type IngestStatus struct {
+	StepStatus
+	RoundsCompleted int    `json:"rounds_completed"`
+	Termination     string `json:"termination_reason,omitempty"`
+}
+
 type Pipeline struct {
 	Detect  *DetectStatus  `json:"detect,omitempty"`
+	Ingest  *IngestStatus  `json:"ingest,omitempty"`
 	Plan    *PlanStatus    `json:"plan,omitempty"`
 	Execute *ExecuteStatus `json:"execute,omitempty"`
 	Verify  *VerifyStatus  `json:"verify,omitempty"`

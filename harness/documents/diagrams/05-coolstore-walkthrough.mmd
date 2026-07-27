@@ -1,0 +1,42 @@
+sequenceDiagram
+    participant G as Graphify
+    participant I as Ingest Loop
+    participant U as User
+    participant P as Plan Step
+
+    Note over G,I: ROUND 0 - SCAN
+    G->>I: detect.json + graph.json
+    I->>I: R1=70% Java EE 7, Maven
+    I->>I: R3=30% audit-logging-library detected
+    I->>I: R4=30% JMS/MDB detected
+    I->>I: R5=50% JPA detected
+    I->>I: R6=100% RestApplication entry point
+    I->>I: R2=0% no target info
+
+    Note over I,U: ROUND 1 - INTERVIEW
+    I->>U: Q1 [R2] What Quarkus version?
+    I->>U: Q2 [R3] audit-logging-library - what does it do?
+    I->>U: Q3 [R4] JMS replacement - CDI Events, Reactive, or Kafka?
+    U->>I: A1 Quarkus latest
+    U->>I: A2 Internal lib, just remove it
+    U->>I: A3 CDI Events, all in-process
+    I->>I: R2 40 to 80%
+    I->>I: R3 30 to 70%
+    I->>I: R4 30 to 70%
+
+    Note over I,U: ROUND 2 - INTERVIEW
+    I->>U: Q1 [R1] Confirm Java EE 7 on WebLogic?
+    I->>U: Q2 [R5] H2 for dev, PostgreSQL for prod?
+    I->>U: Q3 [R3] Any other proprietary libs?
+    U->>I: A1 Yes, WebLogic
+    U->>I: A2 Yes, H2 + PostgreSQL
+    U->>I: A3 No, just that one
+    I->>I: All required at 80% or above
+
+    Note over I,U: FINAL ROUND - FREE-FORM
+    I->>U: Anything else I should know?
+    U->>I: No, that is it
+
+    Note over I,P: OUTPUT
+    I->>P: INGEST_CONTEXT.md + ingest.json
+    Note over P: Plan step reads context<br/>knows about audit lib,<br/>CDI Events decision,<br/>and WebLogic stubs<br/>BEFORE writing PLAN.md

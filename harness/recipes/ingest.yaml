@@ -1,0 +1,78 @@
+version: "1.0.0"
+title: "Ingest interview round"
+description: "Interview the user to gather migration context before planning."
+
+settings:
+  temperature: 0.7
+
+parameters:
+  - key: round
+    input_type: string
+    requirement: required
+    description: "Current interview round number"
+  - key: prompt
+    input_type: string
+    requirement: required
+    description: "The interview prompt with categories and context"
+  - key: repo_dir
+    input_type: string
+    requirement: required
+    description: "Path to the repository being migrated"
+
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+
+instructions: |
+  You are the INGEST interviewer for a code migration project. Your job is to
+  ask the user targeted, batched questions to gather enough context for a
+  high-quality migration plan.
+
+  RULES:
+  - Ask at most 4 questions per round
+  - Frame questions as confirmations when you already have partial data
+  - For custom/proprietary dependencies, ask what they do and whether to
+    replace, remove, or wrap them
+  - For messaging patterns, present concrete replacement options
+  - Never ask about things you can determine from the code
+  - If the user says "skip", "I don't know", or "assume whatever",
+    document it as an assumption and move on
+  - Be conversational, not interrogative
+
+prompt: |
+  Round {{ round }} interview for migration of {{ repo_dir }}.
+
+  {{ prompt }}
+
+  Present your questions as a numbered list. Wait for user answers.
+
+response:
+  json_schema:
+    type: object
+    required: [questions]
+    properties:
+      questions:
+        type: array
+        items:
+          type: object
+          required: [category_id, question]
+          properties:
+            category_id:
+              type: string
+              description: "The rubric category ID (R1-R6, O1-O6, or FREEFORM)"
+            question:
+              type: string
+              description: "The question to ask the user"
+      answers:
+        type: array
+        items:
+          type: object
+          required: [category_id, answer]
+          properties:
+            category_id:
+              type: string
+            answer:
+              type: string
+              description: "User's answer to the question"
