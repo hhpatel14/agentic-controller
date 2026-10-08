@@ -902,14 +902,26 @@ func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 	// this run. The agent prompt opens with a persona ("You are a senior
 	// Java engineer…"), which cut to a line says nothing about the work.
 	excerpt := taskSummary(red.redact(cfg.StageInstructions))
+	// Nothing was typed for this run, so fall back to what it was
+	// declared to be about. Quoted with different words on purpose: a
+	// goal is the shape of the whole job, not the instruction this stage
+	// was handed.
+	goal := ""
+	if excerpt == "" {
+		goal = taskSummary(red.redact(runGoal(cfg)))
+	}
 	stage, count, staged := workflowStagePosition(cfg)
 	switch {
 	case staged && excerpt != "":
 		fmt.Fprintf(&b, "Stage %d of %d — agent works the task: \u201c%s\u201d", stage, count, excerpt)
+	case staged && goal != "":
+		fmt.Fprintf(&b, "Stage %d of %d — agent is working on: \u201c%s\u201d", stage, count, goal)
 	case staged:
 		fmt.Fprintf(&b, "Stage %d of %d — agent is working", stage, count)
 	case excerpt != "":
 		fmt.Fprintf(&b, "Agent works the task: \u201c%s\u201d", excerpt)
+	case goal != "":
+		fmt.Fprintf(&b, "Agent is working on: \u201c%s\u201d", goal)
 	default:
 		b.WriteString("Agent is working")
 	}
@@ -937,6 +949,44 @@ func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 		b.WriteString(")")
 	}
 	return b.String()
+}
+
+// summaryParamKey is the parameter an Agent (or a workflow) can declare
+// to say in one line what a run is for. It exists for the plan ladder:
+// a standalone run with no stage instructions has nothing else to show,
+// since the agent prompt is a persona and the repo and branch are
+// already on the rung above.
+const summaryParamKey = "summary"
+
+// runGoal is what this run is about when nobody wrote it a task: the
+// declared summary parameter, else the workflow's guide. Agent
+// parameters win over workflow ones — the closer the declaration is to
+// this run, the more specific it is. Empty when the run says nothing
+// about itself, which leaves the rung to report only that the agent is
+// working.
+func runGoal(cfg *config.Config) string {
+	for _, values := range []map[string]any{cfg.Params.Agent, cfg.Params.Workflow} {
+		if s := stringParam(values, summaryParamKey); s != "" {
+			return s
+		}
+	}
+	return cfg.WorkflowGuide
+}
+
+// stringParam reads one string-valued parameter, matched without regard
+// to case (parameter names come from user-authored YAML). A value of any
+// other type is not a one-line summary and is ignored rather than
+// rendered as Go's idea of it.
+func stringParam(values map[string]any, key string) string {
+	for k, v := range values {
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 // taskSummary returns the first paragraph of text as one line — the
