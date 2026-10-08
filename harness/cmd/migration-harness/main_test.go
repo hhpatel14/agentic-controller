@@ -11,6 +11,7 @@ import (
 
 	"github.com/konveyor/migration-harness/internal/config"
 	"github.com/konveyor/migration-harness/internal/hub"
+	"github.com/konveyor/migration-harness/internal/params"
 )
 
 // requiredConfigEnvVars are the env vars config.LoadFromEnv requires (see
@@ -423,6 +424,52 @@ func TestPlanTaskRung(t *testing.T) {
 			cfg:   config.Config{},
 			turns: 1,
 			want:  "Agent is working (1 turn)",
+		},
+		{
+			name: "no task, but a declared summary",
+			cfg: config.Config{
+				Model: "m", MaxTurns: 40,
+				Params: params.File{Agent: map[string]any{"summary": "Move coolstore off WildFly"}},
+			},
+			want: `Agent is working on: “Move coolstore off WildFly” (m, up to 34 turns)`,
+		},
+		{
+			name: "an agent summary is more specific than the workflow's",
+			cfg: config.Config{
+				Model: "m",
+				Params: params.File{
+					Agent:    map[string]any{"Summary": "Verify the Quarkus build"},
+					Workflow: map[string]any{"summary": "Migrate coolstore to Quarkus"},
+				},
+			},
+			want: `Agent is working on: “Verify the Quarkus build” (m)`,
+		},
+		{
+			name: "no task and no summary falls back to the workflow guide",
+			cfg: config.Config{
+				Model: "m", WorkflowStage: "2", WorkflowStageCount: "3",
+				WorkflowGuide: "Migrate a Java EE application to Quarkus 3",
+			},
+			turns: 7,
+			want:  `Stage 2 of 3 — agent is working on: “Migrate a Java EE application to Quarkus 3” (m, 7 turns)`,
+		},
+		{
+			name: "a written task wins over every declaration",
+			cfg: config.Config{
+				Model:             "m",
+				StageInstructions: "Fix the findings from the assess stage.",
+				WorkflowGuide:     "Migrate a Java EE application to Quarkus 3",
+				Params:            params.File{Agent: map[string]any{"summary": "Move coolstore off WildFly"}},
+			},
+			want: `Agent works the task: “Fix the findings from the assess stage.” (m)`,
+		},
+		{
+			name: "a non-string summary is not a summary",
+			cfg: config.Config{
+				Model:  "m",
+				Params: params.File{Agent: map[string]any{"summary": 42}},
+			},
+			want: `Agent is working (m)`,
 		},
 		{
 			name: "standalone run with instructions",
