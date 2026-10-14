@@ -223,15 +223,50 @@ func CommitsSince(repo *gogit.Repository, baseSHA string) (int, error) {
 	return n, nil
 }
 
+// PushOutcome distinguishes the three ways a push can succeed. Two
+// different questions are asked of one push and they have different
+// answers: "did this run put anything on the branch" (skipped or not)
+// is what the closing notices report, while "did the remote move just
+// now" (advanced or not) is what a count of pushes means. Collapsing
+// them into a bool makes one of the two wrong — a watcher push that
+// finds nothing new is still a successful push, and the final push is
+// routinely already-up-to-date because the watcher got there first.
+type PushOutcome int
+
+const (
+	// PushSkipped means the run produced no commits, so nothing was
+	// sent: HEAD is still the commit the run started from.
+	PushSkipped PushOutcome = iota
+	// PushUpToDate means the push reached the remote and the remote
+	// already had every commit offered.
+	PushUpToDate
+	// PushAdvanced means the remote branch moved as a result.
+	PushAdvanced
+)
+
+func (o PushOutcome) String() string {
+	switch o {
+	case PushSkipped:
+		return "skipped"
+	case PushUpToDate:
+		return "already up to date"
+	case PushAdvanced:
+		return "advanced"
+	}
+	return "unknown"
+}
+
 // Push updates refs/heads/<branch> on origin. baseSHA is the commit the
 // run started from (HEAD after clone/checkout): when HEAD still equals
 // it the run produced no commits and the push is skipped, so no-op runs
 // do not litter the remote with empty branches. An empty baseSHA
 // disables the check — an unknown base must never block a push of real
-// work. The returned bool is false only when the push was skipped, so
-// callers can report the absence of results instead of claiming they
-// landed on the branch.
-func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch, baseSHA string) (bool, error) {
+// work.
+//
+// See PushOutcome for what the three results mean. Callers reporting
+// whether results reached the branch want "not PushSkipped"; callers
+// counting pushes want PushAdvanced alone.
+func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch, baseSHA string) (PushOutcome, error) {
 	// Not redundant with the NoErrAlreadyUpToDate swallow below: when the
 	// remote branch does not exist yet, PushContext sends a create command
 	// (ZeroHash → local HEAD) instead of reporting already-up-to-date, so
@@ -239,7 +274,7 @@ func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch
 	if baseSHA != "" {
 		if head, err := repo.Head(); err == nil && head.Hash().String() == baseSHA {
 			logging.Info("no commits produced; skipping push of %s", branch)
-			return false, nil
+			return PushSkipped, nil
 		}
 	}
 
@@ -250,9 +285,15 @@ func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch
 		RemoteName: "origin",
 		RefSpecs:   []gogitcfg.RefSpec{refSpec},
 	})
-	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
-		return false, fmt.Errorf("push %s: %w", branch, err)
+	// Already-up-to-date is a successful push of nothing: the watcher
+	// fires on file activity, so most of its pushes find the remote
+	// already holding every commit the agent has made so far.
+	if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return PushUpToDate, nil
+	}
+	if err != nil {
+		return PushSkipped, fmt.Errorf("push %s: %w", branch, err)
 	}
 
-	return true, nil
+	return PushAdvanced, nil
 }

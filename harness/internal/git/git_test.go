@@ -175,12 +175,12 @@ func TestFullLifecycle(t *testing.T) {
 		t.Error("expected commit hash")
 	}
 
-	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	outcome, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
 	if err != nil {
 		t.Fatalf("Push: %v", err)
 	}
-	if !pushed {
-		t.Error("Push reported skipped despite new commits")
+	if outcome != PushAdvanced {
+		t.Errorf("Push outcome = %s, want advanced: new commits move the remote", outcome)
 	}
 
 	// Verify the branch exists on the remote
@@ -325,12 +325,12 @@ func TestPushSkipsWhenNoNewCommits(t *testing.T) {
 
 	// No commits beyond the checkout point: the push must be skipped so
 	// no-op runs do not create empty branches on the remote.
-	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	outcome, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
 	if err != nil {
 		t.Fatalf("Push: %v", err)
 	}
-	if pushed {
-		t.Error("Push reported pushed despite no new commits")
+	if outcome != PushSkipped {
+		t.Errorf("Push outcome = %s, want skipped: no new commits means nothing is sent", outcome)
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)
@@ -377,12 +377,12 @@ func TestPushWithNewCommitsPushes(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	outcome, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
 	if err != nil {
 		t.Fatalf("Push: %v", err)
 	}
-	if !pushed {
-		t.Error("Push reported skipped despite new commits")
+	if outcome != PushAdvanced {
+		t.Errorf("Push outcome = %s, want advanced: new commits move the remote", outcome)
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)
@@ -432,12 +432,12 @@ func TestPushSkipsWhenStageAddsNoNewCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage 1 commit: %v", err)
 	}
-	pushed1, err := Push(ctx, cred, repo1, cred.Branch, base1)
+	outcome1, err := Push(ctx, cred, repo1, cred.Branch, base1)
 	if err != nil {
 		t.Fatalf("stage 1 Push: %v", err)
 	}
-	if !pushed1 {
-		t.Error("stage 1 Push reported skipped despite new commits")
+	if outcome1 != PushAdvanced {
+		t.Errorf("stage 1 Push outcome = %s, want advanced: new commits move the remote", outcome1)
 	}
 
 	// Stage 2: fresh clone, checkout resolves the branch stage 1 pushed,
@@ -457,12 +457,12 @@ func TestPushSkipsWhenStageAddsNoNewCommits(t *testing.T) {
 	if base2 != hash.String() {
 		t.Fatalf("stage 2 base = %s, want stage 1 tip %s", base2, hash)
 	}
-	pushed2, err := Push(ctx, cred, repo2, cred.Branch, base2)
+	outcome2, err := Push(ctx, cred, repo2, cred.Branch, base2)
 	if err != nil {
 		t.Fatalf("stage 2 Push: %v", err)
 	}
-	if pushed2 {
-		t.Error("stage 2 Push reported pushed despite no new commits")
+	if outcome2 != PushSkipped {
+		t.Errorf("stage 2 Push outcome = %s, want skipped: no new commits means nothing is sent", outcome2)
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)
@@ -552,6 +552,64 @@ func TestFileChangedSince(t *testing.T) {
 
 // TestCommitsSince counts what a run produced, which is what the plan
 // ladder's closing rung reports to viewers.
+// TestPushRepeatedIsUpToDateNotAdvanced is the watcher's normal day: it
+// fires on file activity, not on commits, so once the agent has
+// committed once every later push reaches the remote and finds nothing
+// new. Those must not read as the remote having moved — the plan
+// ladder counts advances, and counting these reported tens of "pushes"
+// for a single commit.
+func TestPushRepeatedIsUpToDateNotAdvanced(t *testing.T) {
+	remoteDir, _ := setupBareRemote(t)
+	seedBareRepo(t, remoteDir)
+
+	cred := &Credentials{
+		Username: "test",
+		Token:    "token",
+		RepoURL:  remoteDir,
+		Branch:   "migration-work",
+	}
+	ctx := context.Background()
+	cloneDir := filepath.Join(t.TempDir(), "work")
+	repo, err := Clone(ctx, cred, cloneDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := CheckoutBranch(repo, cred.Branch); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+	baseSHA, err := HeadSHA(repo)
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+
+	wt, _ := repo.Worktree()
+	os.WriteFile(filepath.Join(cloneDir, "migrated.java"), []byte("class Foo {}\n"), 0644)
+	wt.Add("migrated.java")
+	if _, err := wt.Commit("migrate", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// The watcher's first push after that commit really does move the
+	// remote.
+	if outcome, err := Push(ctx, cred, repo, cred.Branch, baseSHA); err != nil || outcome != PushAdvanced {
+		t.Fatalf("first Push = %s, %v; want advanced, nil", outcome, err)
+	}
+
+	// Every quiet period after it does not. HEAD is past baseSHA now, so
+	// the skip guard no longer fires and a real push goes out each time.
+	for i := 0; i < 3; i++ {
+		outcome, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+		if err != nil {
+			t.Fatalf("repeat Push %d: %v", i, err)
+		}
+		if outcome != PushUpToDate {
+			t.Errorf("repeat Push %d = %s, want already up to date", i, outcome)
+		}
+	}
+}
+
 func TestCommitsSince(t *testing.T) {
 	remoteDir, _ := setupBareRemote(t)
 	seedBareRepo(t, remoteDir)

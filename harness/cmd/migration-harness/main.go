@@ -383,9 +383,13 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	// turnsSeen is the run's turn count so far across the primary prompt
 	// and the handoff; the task rung re-renders with it on every turn.
 	var turnsSeen atomic.Int64
-	// pushesLanded counts the pushes that actually reached the remote,
-	// and commitsPushed the commits they carried — the two numbers the
-	// bottom rung reports. commitsPushed stays -1 ("not counted yet")
+	// pushesLanded counts the pushes that actually moved the remote
+	// branch, and commitsPushed the commits they carried — the two
+	// numbers the bottom rung reports. Pushes that reached the remote
+	// and found nothing new are not counted: the watcher fires on file
+	// activity rather than on commits, so most of its pushes are
+	// already-up-to-date and counting those would report tens of
+	// "pushes" for one commit. commitsPushed stays -1 ("not counted yet")
 	// until the final push: counting it walks git history, which has no
 	// business running on the per-turn ladder path.
 	var pushesLanded, commitsPushed atomic.Int64
@@ -407,15 +411,16 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		})
 	}
 	var pushSeq atomic.Int64
-	emitPush := func(title string, fn func() (bool, error)) (bool, error) {
-		// A push that was skipped (no commits) or failed did not land,
-		// so only a true/nil answer counts towards the rung.
-		run := func() (bool, error) {
-			pushed, err := fn()
-			if pushed && err == nil {
+	emitPush := func(title string, fn func() (git.PushOutcome, error)) (git.PushOutcome, error) {
+		// Only a push that moved the remote counts towards the rung: one
+		// that was skipped, failed, or found the remote already holding
+		// every commit put nothing new on the branch.
+		run := func() (git.PushOutcome, error) {
+			outcome, err := fn()
+			if err == nil && outcome == git.PushAdvanced {
 				pushesLanded.Add(1)
 			}
-			return pushed, err
+			return outcome, err
 		}
 		if teeSrv == nil {
 			return run()
@@ -425,7 +430,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 			"sessionUpdate": "tool_call", "toolCallId": id, "title": title,
 			"kind": "execute", "status": "in_progress",
 		})
-		pushed, err := run()
+		outcome, err := run()
 		status := "completed"
 		if err != nil {
 			status = "failed"
@@ -433,7 +438,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		teeSrv.EmitRunUpdate(map[string]any{
 			"sessionUpdate": "tool_call_update", "toolCallId": id, "status": status,
 		})
-		return pushed, err
+		return outcome, err
 	}
 	emitNotice := func(format string, args ...any) {
 		if teeSrv == nil {
@@ -467,7 +472,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
 	pushFn := func() error {
-		_, err := emitPush(fmt.Sprintf("git push to branch %s (auto-commit watcher)", creds.Branch), func() (bool, error) {
+		_, err := emitPush(fmt.Sprintf("git push to branch %s (auto-commit watcher)", creds.Branch), func() (git.PushOutcome, error) {
 			return git.Push(ctx, creds, repo, creds.Branch, baseSHA)
 		})
 		return err
@@ -658,9 +663,15 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
-	pushed, pushErr := emitPush(fmt.Sprintf("git push to branch %s (final)", creds.Branch), func() (bool, error) {
+	pushOutcome, pushErr := emitPush(fmt.Sprintf("git push to branch %s (final)", creds.Branch), func() (git.PushOutcome, error) {
 		return git.Push(pushCtx, creds, repo, creds.Branch, baseSHA)
 	})
+	// The closing notices ask a different question of the push than the
+	// rung's counter does: not "did the remote move just now" but "is
+	// this run's work on the branch at all". A final push that finds the
+	// remote already up to date still means yes — the watcher put it
+	// there — so only a skipped push counts as nothing to report.
+	pushed := pushOutcome != git.PushSkipped
 	if pushErr != nil {
 		emitOutcome("stage failed — final push error: %v", pushErr)
 		term.ExitCode = 1
