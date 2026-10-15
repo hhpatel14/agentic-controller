@@ -663,3 +663,66 @@ func TestCommitsSince(t *testing.T) {
 		t.Errorf("CommitsSince with a base not in history = %d, %v; want -1, nil", n, err)
 	}
 }
+
+// TestCommitsSinceStopsAtTheWalkBound: a base the agent took off the
+// first-parent chain — by rebasing, resetting, or merging from the
+// other side — is not found, and without a bound the walk reads the
+// whole repository back to its root to discover that. The bound gives
+// the same "unknown" without the reading. The clone is full depth and
+// the repositories this runs against are decade-old applications, so
+// the unbounded walk is tens of thousands of objects on the exit path.
+func TestCommitsSinceStopsAtTheWalkBound(t *testing.T) {
+	remoteDir, _ := setupBareRemote(t)
+	seedBareRepo(t, remoteDir)
+
+	cred := &Credentials{
+		Username: "test",
+		Token:    "token",
+		RepoURL:  remoteDir,
+		Branch:   "migration-work",
+	}
+	cloneDir := filepath.Join(t.TempDir(), "work")
+	repo, err := Clone(context.Background(), cred, cloneDir)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := CheckoutBranch(repo, cred.Branch); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+	baseSHA, err := HeadSHA(repo)
+	if err != nil {
+		t.Fatalf("HeadSHA: %v", err)
+	}
+
+	wt, _ := repo.Worktree()
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("migrated%d.java", i)
+		os.WriteFile(filepath.Join(cloneDir, name), []byte("class Foo {}\n"), 0644)
+		wt.Add(name)
+		if _, err := wt.Commit("migrate: "+name, &gogit.CommitOptions{
+			Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+		}); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+	}
+
+	// A bound the run's own commits fit inside changes nothing: the
+	// base is found before the walk is anywhere near it.
+	if n, err := commitsSince(repo, baseSHA, 5000); err != nil || n != 5 {
+		t.Errorf("commitsSince within the bound = %d, %v; want 5, nil", n, err)
+	}
+
+	// A base further back than the bound allows is reported unknown
+	// rather than walked to. Shrinking the bound to 2 stands in for the
+	// real case: a base that is not on the chain at all, with a
+	// repository far longer than the bound behind it.
+	if n, err := commitsSince(repo, baseSHA, 2); err != nil || n != -1 {
+		t.Errorf("commitsSince past the bound = %d, %v; want -1, nil", n, err)
+	}
+
+	// The bound is a ceiling on the walk, not on the count: a base
+	// exactly at it is still found and counted.
+	if n, err := commitsSince(repo, baseSHA, 5); err != nil || n != 5 {
+		t.Errorf("commitsSince with the base exactly at the bound = %d, %v; want 5, nil", n, err)
+	}
+}

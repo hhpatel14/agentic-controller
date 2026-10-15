@@ -187,6 +187,15 @@ func FileChangedSince(repo *gogit.Repository, baseSHA, relPath string) (bool, er
 	return base != string(current), nil
 }
 
+// commitsSinceMaxWalk bounds the history walk. A run produces tens of
+// commits — the turn ceiling puts a couple of hundred at the very
+// outside — so a base this far back is not on HEAD's first-parent
+// chain at all and the walk is on its way to the repository's root.
+// The clone is full depth and these are decade-old applications, so
+// that is tens of thousands of objects decoded to answer "unknown"
+// anyway, on the exit path, for one word of rung text.
+const commitsSinceMaxWalk = 5000
+
 // CommitsSince counts the commits between baseSHA — the commit the run
 // started from — and HEAD, i.e. how much work this run actually
 // produced. It walks first-parent history from HEAD and stops at
@@ -196,9 +205,17 @@ func FileChangedSince(repo *gogit.Repository, baseSHA, relPath string) (bool, er
 // An empty baseSHA means the starting point was never recorded, so
 // nothing can be counted and the result is -1, not 0 — the difference
 // between "no work" and "unknown" matters to the caller rendering it.
-// A baseSHA that is not an ancestor of HEAD (history rewritten under
-// the run) also yields -1 rather than the whole branch's length.
+// A baseSHA that is not an ancestor of HEAD (the agent rebased, reset,
+// or merged from the other side, all of which it is free to do) also
+// yields -1 rather than the whole branch's length, whether that is
+// discovered at the root or at commitsSinceMaxWalk.
 func CommitsSince(repo *gogit.Repository, baseSHA string) (int, error) {
+	return commitsSince(repo, baseSHA, commitsSinceMaxWalk)
+}
+
+// commitsSince is CommitsSince with the walk bound injected, so a test
+// can reach the cap without building commitsSinceMaxWalk commits.
+func commitsSince(repo *gogit.Repository, baseSHA string, maxWalk int) (int, error) {
 	if baseSHA == "" {
 		return -1, nil
 	}
@@ -209,6 +226,12 @@ func CommitsSince(repo *gogit.Repository, baseSHA string) (int, error) {
 	base := plumbing.NewHash(baseSHA)
 	n := 0
 	for hash := head.Hash(); hash != base; {
+		if n == maxWalk {
+			// Same answer the root would give, reached without reading
+			// the rest of the repository to get there.
+			logging.Info("commit count: base %s not within %d commits of HEAD; not counting", baseSHA, maxWalk)
+			return -1, nil
+		}
 		commit, err := repo.CommitObject(hash)
 		if err != nil {
 			return -1, fmt.Errorf("walk history from %s: %w", hash, err)
