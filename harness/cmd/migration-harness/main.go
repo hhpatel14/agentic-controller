@@ -1128,6 +1128,19 @@ func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 		// reserve, so the configured budget is the honest denominator.
 		ceiling = cfg.MaxTurns
 	}
+	// The configured budget is not a hard stop either: the native limit
+	// is enforced per prompt, and the handoff is a second prompt, so it
+	// gets its own full allowance rather than the reserve the harness
+	// set aside for it. At the default 200 that puts the count as high
+	// as 340. Whatever the phases turn out to be, a viewer must never
+	// read "turn 340 of 200" — the count is the one number here that is
+	// measured rather than predicted, so the denominator yields to it.
+	// Only where there is a denominator at all: an unconfigured budget
+	// has none, and the count must not become its own ceiling and imply
+	// a limit the run does not have.
+	if ceiling > 0 {
+		ceiling = max(ceiling, turnsUsed)
+	}
 	var budget string
 	switch {
 	case turnsUsed > 0 && ceiling > 0:

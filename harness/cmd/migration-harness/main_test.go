@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -414,6 +415,22 @@ func TestPlanTaskRung(t *testing.T) {
 			want:  "Agent is working (m, turn 178 of 200)",
 		},
 		{
+			// The native limit is enforced per prompt and the handoff is
+			// a second prompt, so the count can pass the configured
+			// budget too — at the default 200 it reaches 340. The
+			// denominator yields rather than render "turn 213 of 200".
+			name:  "a count past the configured budget takes the budget with it",
+			cfg:   config.Config{Model: "m", MaxTurns: 200},
+			turns: 213,
+			want:  "Agent is working (m, turn 213 of 213)",
+		},
+		{
+			name:  "the worst case the two prompts can reach",
+			cfg:   config.Config{Model: "m", MaxTurns: 200},
+			turns: 340,
+			want:  "Agent is working (m, turn 340 of 340)",
+		},
+		{
 			name:  "progress without a budget",
 			cfg:   config.Config{Model: "m"},
 			turns: 12,
@@ -666,6 +683,45 @@ func TestPlanTaskRungRedactsSecrets(t *testing.T) {
 	if !strings.Contains(got, "[redacted]") {
 		t.Fatalf("expected redaction marker in %q", got)
 	}
+}
+
+// TestPlanTaskRungTurnNeverPassesItsBudget is the invariant behind the
+// individual cases: whatever the phases of a run turn out to be, and
+// however far the count runs past what was configured, "turn N of M"
+// must never show an N greater than M. A viewer cannot act on a
+// fraction that is impossible; it just tells them the display is
+// broken, which is the problem this rung set out to fix.
+func TestPlanTaskRungTurnNeverPassesItsBudget(t *testing.T) {
+	red := newRedactor()
+	for _, maxTurns := range []int{0, 1, 2, 10, 40, 200, 1000} {
+		for _, turnsUsed := range []int{0, 1, 2, 9, 170, 200, 213, 340, 2500} {
+			got := planTaskRung(&config.Config{Model: "m", MaxTurns: maxTurns}, red, turnsUsed)
+			var n, m int
+			if _, err := fmt.Sscanf(budgetFragment(got), "turn %d of %d", &n, &m); err != nil {
+				// No fraction rendered (no budget, or no turns yet):
+				// nothing to violate.
+				continue
+			}
+			if n > m {
+				t.Errorf("maxTurns %d, turnsUsed %d: rung reads %q — turn %d of %d is not a thing",
+					maxTurns, turnsUsed, got, n, m)
+			}
+		}
+	}
+}
+
+// budgetFragment returns what a rung put in its trailing parentheses,
+// after the model name, which is where the turn fraction lives.
+func budgetFragment(rung string) string {
+	open := strings.LastIndex(rung, "(")
+	if open < 0 || !strings.HasSuffix(rung, ")") {
+		return ""
+	}
+	inner := rung[open+1 : len(rung)-1]
+	if _, after, found := strings.Cut(inner, ", "); found {
+		return after
+	}
+	return inner
 }
 
 func TestPlanPrepRung(t *testing.T) {
