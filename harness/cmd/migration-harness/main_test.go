@@ -624,6 +624,32 @@ func TestTaskSummary(t *testing.T) {
 			want: "Replace the JMS listeners with SmallRye Reactive Messaging.",
 		},
 		{
+			// The marker used to be stripped from the first line only,
+			// stranding every later dash in the middle of the sentence.
+			name: "every list item loses its marker, and the items stay apart",
+			text: "- Replace JMS with SmallRye\n- Port the EJB timers\n- Drop the JNDI lookups",
+			want: "Replace JMS with SmallRye; Port the EJB timers; Drop the JNDI lookups",
+		},
+		{
+			// A lead-in is part of the sentence its first item finishes,
+			// so the separator starts at the second item.
+			name: "a lead-in line runs into the first item, not the second",
+			text: "Migrate the messaging layer:\n* Replace JMS\n* Port the timers",
+			want: "Migrate the messaging layer: Replace JMS; Port the timers",
+		},
+		{
+			name: "a wrapped item is one item, not two",
+			text: "- Replace the JMS listeners with\n  SmallRye Reactive Messaging\n- Port the EJB timers",
+			want: "Replace the JMS listeners with SmallRye Reactive Messaging; Port the EJB timers",
+		},
+		{
+			// A blockquote carried over two lines is wrapped prose; only
+			// bullets earn the separator.
+			name: "a quote is not a list",
+			text: "> the app is a JEE6 monolith\n> on WildFly 10",
+			want: "the app is a JEE6 monolith on WildFly 10",
+		},
+		{
 			name: "a rule line opens nothing",
 			text: "---\nMigrate the catalog service.",
 			want: "Migrate the catalog service.",

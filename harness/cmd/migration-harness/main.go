@@ -1221,11 +1221,31 @@ func stringParam(values map[string]any, key string) string {
 	return ""
 }
 
+// taskSummaryMarkers are the Markdown line prefixes stripped from the
+// excerpt: heading, bullet and quote markers, which say how the text is
+// laid out rather than what the work is.
+//
+// taskSummaryListMarkers are the subset that open a list item. Only
+// those earn a separator when the paragraph is flattened: a blockquote
+// or a heading running to a second line is wrapped prose, one sentence
+// continued, and punctuating it would invent a break the author did not
+// write.
+const (
+	taskSummaryMarkers     = "#*->"
+	taskSummaryListMarkers = "*-"
+)
+
 // taskSummary returns the paragraph of text that describes the work as
-// one line — the paragraph's lines joined with spaces, so hard-wrapped
-// YAML prose is not cut at its first wrap — stripped of leading Markdown
-// heading and list markers and cut to taskSummaryMaxLen runes with an
-// ellipsis. Empty when the text is blank.
+// one line — the paragraph's lines joined, so hard-wrapped YAML prose is
+// not cut at its first wrap — stripped of Markdown heading and list
+// markers and cut to taskSummaryMaxLen runes with an ellipsis. Empty
+// when the text is blank.
+//
+// Markers are stripped from every line, not just the paragraph's first,
+// because stage instructions are routinely a bulleted list and a dash
+// stranded mid-sentence reads as a typo. The items are rejoined with
+// "; " from the second one on: a list flattened on spaces alone runs its
+// items together into a sentence that was never written.
 //
 // A lone Markdown heading ("## Remediate") and a labelled preamble
 // ("Context: …") are skipped in favour of the next paragraph: both are
@@ -1236,25 +1256,27 @@ func taskSummary(text string) string {
 	var (
 		summary  string // first paragraph that describes the work
 		fallback string // first paragraph of any kind
-		words    []string
+		para     strings.Builder
 		lines    int
 		hashed   bool // the paragraph opened with a Markdown heading marker
+		listed   bool // a list marker has already opened an item here
 	)
 	// flush ends the current paragraph and offers it as the summary.
 	flush := func() {
-		if len(words) == 0 {
+		if para.Len() == 0 {
 			return
 		}
-		para := strings.Join(words, " ")
+		joined := para.String()
 		// A heading marker on a paragraph that runs to several lines is
 		// an oddly written sentence, not a title.
-		skip := (hashed && lines == 1) || isTaskSummaryPreamble(para)
-		words, lines = nil, 0
+		skip := (hashed && lines == 1) || isTaskSummaryPreamble(joined)
+		para.Reset()
+		lines, listed = 0, false
 		if fallback == "" {
-			fallback = para
+			fallback = joined
 		}
 		if summary == "" && !skip {
-			summary = para
+			summary = joined
 		}
 	}
 	for _, line := range strings.Split(text, "\n") {
@@ -1263,16 +1285,35 @@ func taskSummary(text string) string {
 			flush()
 			continue
 		}
-		if len(words) == 0 {
+		marked := strings.IndexByte(taskSummaryMarkers, line[0]) >= 0
+		item := strings.IndexByte(taskSummaryListMarkers, line[0]) >= 0
+		if para.Len() == 0 {
 			hashed = strings.HasPrefix(line, "#")
-			line = strings.TrimSpace(strings.TrimLeft(line, "#*->"))
+		}
+		if marked {
+			line = strings.TrimSpace(strings.TrimLeft(line, taskSummaryMarkers))
 			if line == "" {
 				// A bare marker line ("---", "###") opens nothing.
 				continue
 			}
 		}
+		switch {
+		case para.Len() == 0:
+			// Nothing to separate from yet.
+		case item && listed:
+			// The second item onwards: the marker that used to divide
+			// these became the "; " that divides them now.
+			para.WriteString("; ")
+		default:
+			// A wrapped continuation of the line above, or the first
+			// item after a lead-in — one sentence either way.
+			para.WriteString(" ")
+		}
+		if item {
+			listed = true
+		}
 		lines++
-		words = append(words, strings.Fields(line)...)
+		para.WriteString(strings.Join(strings.Fields(line), " "))
 	}
 	flush()
 	if summary == "" {
